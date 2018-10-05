@@ -6,6 +6,10 @@ import collections
 import inflection
 import re
 import itertools
+import os
+import shutil
+
+TARGET_REJECTED_DIR = os.getenv("TARGET_REJECTED_DIR")
 
 logger = singer.get_logger()
 
@@ -41,14 +45,6 @@ def safe_column_name(name):
 
 def column_clause(name, schema_property):
     return '{} {}'.format(safe_column_name(name), column_type(schema_property))
-
-
-def sanitize(value):
-    if not isinstance(value, str):
-        return value
-
-    # this sequence will cause the CSV load to fail
-    return value.replace("\\u0000", '')
 
 
 def flatten_key(k, parent_key, sep):
@@ -108,7 +104,10 @@ def flatten_record(d, parent_key=[], sep='__'):
 
 
 def primary_column_names(stream_schema_message):
-    return [safe_column_name(inflect_column_name(p)) for p in stream_schema_message['key_properties']]
+    return [
+        safe_column_name(inflect_column_name(p))
+        for p in stream_schema_message['key_properties']
+    ]
 
 
 class DbSync:
@@ -117,6 +116,7 @@ class DbSync:
         self.schema_name = self.connection_config['schema']
         self.stream_schema_message = stream_schema_message
         self.flatten_schema = flatten_schema(stream_schema_message['schema'])
+        self.rejected_count = 0
 
     def open_connection(self):
         conn_string = "host='{}' dbname='{}' user='{}' password='{}' port='{}'".format(
@@ -153,6 +153,21 @@ class DbSync:
         else:
             return '{}.{}'.format(self.schema_name, table_name)
 
+    def reject_file(self, file):
+        self.rejected_count += 1
+
+        if not TARGET_REJECTED_DIR:
+            return
+
+        os.makedirs(TARGET_REJECTED_DIR, exist_ok=True)
+        rejected_file_name = "{}-{:04d}.rej.csv".format(self.stream_schema_message['stream'],
+                                                    self.rejected_count)
+        rejected_file_path = os.path.join(TARGET_REJECTED_DIR,
+                                          rejected_file_name)
+
+        shutil.copy(file.name, rejected_file_path)
+        logger.info("Saved rejected entries as {}".format(rejected_file_path))
+
     def record_primary_key_string(self, record):
         if len(self.stream_schema_message['key_properties']) == 0:
             return None
@@ -164,35 +179,39 @@ class DbSync:
         flatten = flatten_record(record)
         return ','.join(
             [
-                json.dumps(sanitize(flatten[name])) if name in flatten and flatten[name] else ''
+                json.dumps(flatten[name]) if name in flatten and flatten[name] else ''
                 for name in self.flatten_schema
             ]
         )
 
     def load_csv(self, file, count):
-        file.seek(0)
-        stream_schema_message = self.stream_schema_message
-        stream = stream_schema_message['stream']
-        logger.info("Loading {} rows into '{}'".format(count, stream))
+        try:
+            file.seek(0)
+            stream_schema_message = self.stream_schema_message
+            stream = stream_schema_message['stream']
+            logger.info("Loading {} rows into '{}'".format(count, stream))
 
-        with self.open_connection() as connection:
-            with connection.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
-                cur.execute(self.create_table_query(True))
-                copy_sql = "COPY {} ({}) FROM STDIN WITH (FORMAT CSV, ESCAPE '\\')".format(
-                    self.table_name(stream, True),
-                    ', '.join(self.column_names())
-                )
-                logger.info(copy_sql)
-                cur.copy_expert(
-                    copy_sql,
-                    file
-                )
-                if len(self.stream_schema_message['key_properties']) > 0:
-                    cur.execute(self.update_from_temp_table())
+            with self.open_connection() as connection:
+                with connection.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+                    cur.execute(self.create_table_query(True))
+                    copy_sql = "COPY {} ({}) FROM STDIN WITH (FORMAT CSV, ESCAPE '\\')".format(
+                        self.table_name(stream, True),
+                        ', '.join(self.column_names())
+                    )
+                    logger.info(copy_sql)
+                    cur.copy_expert(
+                        copy_sql,
+                        file
+                    )
+                    if len(self.stream_schema_message['key_properties']) > 0:
+                        cur.execute(self.update_from_temp_table())
+                        logger.info(cur.statusmessage)
+                    cur.execute(self.insert_from_temp_table())
                     logger.info(cur.statusmessage)
-                cur.execute(self.insert_from_temp_table())
-                logger.info(cur.statusmessage)
-                cur.execute(self.drop_temp_table())
+                    cur.execute(self.drop_temp_table())
+        except psycopg2.DataError as err:
+            logger.exception("Failed to load CSV file: {}".format(file.name))
+            self.reject_file(file)
 
     def insert_from_temp_table(self):
         stream_schema_message = self.stream_schema_message

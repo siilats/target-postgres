@@ -10,7 +10,7 @@ import http.client
 import urllib
 from datetime import datetime
 import collections
-from tempfile import TemporaryFile
+from tempfile import NamedTemporaryFile
 
 import pkg_resources
 from jsonschema.validators import Draft4Validator
@@ -101,7 +101,7 @@ def persist_lines(config, lines):
             stream_to_sync[stream].create_schema_if_not_exists()
             stream_to_sync[stream].sync_table()
             row_count[stream] = 0
-            csv_files_to_load[stream] = TemporaryFile(mode='w+b')
+            csv_files_to_load[stream] = NamedTemporaryFile(mode='w+b')
         elif t == 'ACTIVATE_VERSION':
             logger.debug('ACTIVATE_VERSION message')
         else:
@@ -120,7 +120,7 @@ def flush_records(o, csv_files_to_load, row_count, primary_key_exists, sync):
     sync.load_csv(csv_files_to_load[stream], row_count[stream])
     row_count[stream] = 0
     primary_key_exists[stream] = {}
-    csv_files_to_load[stream] = TemporaryFile(mode='w+b')
+    csv_files_to_load[stream] = NamedTemporaryFile(mode='w+b')
 
 
 def main():
