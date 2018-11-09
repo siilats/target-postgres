@@ -20,16 +20,16 @@ from target_postgres.db_sync import DbSync
 logger = singer.get_logger()
 
 
-def emit_state(state):
-    if state is not None:
-        line = json.dumps(state)
-        logger.debug('Emitting state {}'.format(line))
-        sys.stdout.write("{}\n".format(line))
-        sys.stdout.flush()
+STATE = {}
+
+
+def emit_bookmark(stream, bookmark):
+    STATE['bookmarks'] = {stream: bookmark}
+    singer.write_state(STATE)
 
 
 def persist_lines(config, lines):
-    state = None
+    bookmarks = {}
     schemas = {}
     key_properties = {}
     headers = {}
@@ -38,7 +38,7 @@ def persist_lines(config, lines):
     row_count = {}
     stream_to_sync = {}
     primary_key_exists = {}
-    batch_size = config['batch_size'] if 'batch_size' in config else 100000
+    batch_size = int(config.get('batch_size', 100_000))
 
     now = datetime.now().strftime('%Y%m%dT%H%M%S')
 
@@ -73,21 +73,23 @@ def persist_lines(config, lines):
             if stream not in primary_key_exists:
                 primary_key_exists[stream] = {}
             if primary_key_string and primary_key_string in primary_key_exists[stream]:
-                flush_records(o, csv_files_to_load, row_count, primary_key_exists, sync)
+                flush_records(stream, csv_files_to_load, row_count, primary_key_exists, bookmarks, sync)
 
             csv_line = sync.record_to_csv_line(o['record'])
-            csv_files_to_load[o['stream']].write(bytes(csv_line + '\n', 'UTF-8'))
-            row_count[o['stream']] += 1
+            csv_files_to_load[stream].write(bytes(csv_line + '\n', 'UTF-8'))
+            row_count[stream] += 1
             if primary_key_string:
                 primary_key_exists[stream][primary_key_string] = True
 
-            if row_count[o['stream']] >= batch_size:
-                flush_records(o, csv_files_to_load, row_count, primary_key_exists, sync)
-
-            state = None
+            if row_count[stream] >= batch_size:
+                flush_records(stream, csv_files_to_load, row_count, primary_key_exists, bookmarks, sync)
         elif t == 'STATE':
-            logger.debug('Setting state to {}'.format(o['value']))
+            # update each bookmarks
             state = o['value']
+            logger.info(f"STATE: {state}")
+            for stream, bookmark in state.get('bookmarks', {}).items():
+                logger.info(f"{stream}: {bookmark}")
+                bookmarks[stream] = bookmark
         elif t == 'SCHEMA':
             if 'stream' not in o:
                 raise Exception("Line is missing required key 'stream': {}".format(line))
@@ -108,19 +110,25 @@ def persist_lines(config, lines):
             raise Exception("Unknown message type {} in message {}"
                             .format(o['type'], o))
 
-    for (stream_name, count) in row_count.items():
-        if count > 0:
-            stream_to_sync[stream_name].load_csv(csv_files_to_load[stream_name], count)
+    streams = (stream
+               for stream, count in row_count.items()
+               if count)
 
-    return state
+    for stream in streams:
+        flush_records(stream,
+                      csv_files_to_load,
+                      row_count,
+                      primary_key_exists,
+                      bookmarks,
+                      stream_to_sync[stream])
 
 
-def flush_records(o, csv_files_to_load, row_count, primary_key_exists, sync):
-    stream = o['stream']
+def flush_records(stream, csv_files_to_load, row_count, primary_key_exists, bookmarks, sync):
     sync.load_csv(csv_files_to_load[stream], row_count[stream])
     row_count[stream] = 0
     primary_key_exists[stream] = {}
     csv_files_to_load[stream] = NamedTemporaryFile(mode='w+b')
+    emit_bookmark(stream, bookmarks[stream])
 
 
 def main():
@@ -135,9 +143,9 @@ def main():
         config = {}
 
     input = io.TextIOWrapper(sys.stdin.buffer, encoding='utf-8')
-    state = persist_lines(config, input)
+    persist_lines(config, input)
 
-    emit_state(state)
+    singer.write_state(STATE)
     logger.debug("Exiting normally")
 
 
