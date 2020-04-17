@@ -3,9 +3,9 @@ from setuptools import setup
 
 setup(
     name="target-postgres",
-    version="1.1.3",
-    description="Singer.io target for Postgres",
-    author="Statsbot",
+    version="meltano.1.1.4",
+    description="Meltano maintained fork of target-postgres - Singer.io target for Postgres",
+    author="Meltano and Statsbot",
     url="https://statsbot.co",
     classifiers=["Programming Language :: Python :: 3 :: Only"],
     py_modules=["target_postgres"],
