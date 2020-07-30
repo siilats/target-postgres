@@ -10,6 +10,7 @@ import os
 import shutil
 
 TARGET_REJECTED_DIR = os.getenv("TARGET_REJECTED_DIR")
+NULL_TYPE = {'type': 'null'}
 
 logger = singer.get_logger()
 
@@ -74,14 +75,16 @@ def flatten_schema(d, parent_key=[], sep='__'):
                 items.extend(flatten_schema(v, parent_key + [k], sep=sep).items())
             else:
                 items.append((new_key, v))
+        elif 'anyOf' in v.keys():
+            properties = list(v.values())[0]
+            if NULL_TYPE not in properties or len(properties) > 2:
+                raise ValueError('Unsupported column type anyOf: {}'.format(k))
+            property = list(filter(lambda x: x != NULL_TYPE, properties))[0]
+            if not isinstance(property['type'], list):
+                property['type'] = ['null', property['type']]
+            items.append((new_key, property))
         else:
-            property = list(v.values())[0][0]
-            if property['type'] == 'string':
-                property['type'] = ['null', 'string']
-                items.append((new_key, property))
-            elif property['type'] == 'array':
-                property['type'] = ['null', 'array']
-                items.append((new_key, property))
+            raise ValueError('Unsupported column type: {}'.format(k))
 
     key_func = lambda item: item[0]
     sorted_items = sorted(items, key=key_func)
