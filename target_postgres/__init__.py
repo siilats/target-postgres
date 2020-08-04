@@ -53,7 +53,7 @@ def walk_schema_for_numeric_precision(schema):
     elif isinstance(schema, dict):
         if numeric_schema_with_precision(schema):
             def get_precision(key):
-                v = math.log10(schema.get(key, 1))
+                v = abs(Decimal(schema.get(key, 1))).log10()
                 if v < 0:
                     return round(math.floor(v))
                 return round(math.ceil(v))
