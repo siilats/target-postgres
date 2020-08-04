@@ -2,6 +2,7 @@
 
 import argparse
 import io
+import math
 import os
 import sys
 import json
@@ -14,12 +15,12 @@ from tempfile import NamedTemporaryFile
 
 import pkg_resources
 from jsonschema import Draft4Validator, FormatChecker
+import decimal
 from decimal import Decimal
 import singer
 from target_postgres.db_sync import DbSync
 
 logger = singer.get_logger()
-
 
 def float_to_decimal(value):
     '''Walk the given data structure and turn all instances of float into
@@ -31,6 +32,41 @@ def float_to_decimal(value):
     if isinstance(value, dict):
         return {k: float_to_decimal(v) for k, v in value.items()}
     return value
+
+def numeric_schema_with_precision(schema):
+    if 'type' not in schema:
+        return False
+    if isinstance(schema['type'], list):
+        if 'number' not in schema['type']:
+            return False
+    elif schema['type'] != 'number':
+        return False
+    if 'multipleOf' in schema:
+        return True
+    return 'minimum' in schema or 'maximum' in schema
+
+
+def walk_schema_for_numeric_precision(schema):
+    if isinstance(schema, list):
+        for v in schema:
+            walk_schema_for_numeric_precision(v)
+    elif isinstance(schema, dict):
+        if numeric_schema_with_precision(schema):
+            def get_precision(key):
+                v = math.log10(schema.get(key, 1))
+                if v < 0:
+                    return round(math.floor(v))
+                return round(math.ceil(v))
+            scale = -1 * get_precision('multipleOf')
+            digits = max(get_precision('minimum'), get_precision('maximum'))
+            precision = digits + scale
+            if decimal.getcontext().prec < precision:
+                logger.debug('Setting decimal precision to {}'.format(precision))
+                decimal.getcontext().prec = precision
+        else:
+            for v in schema.values():
+                walk_schema_for_numeric_precision(v)
+
 
 def emit_state(state):
     if state is not None:
@@ -106,6 +142,7 @@ def persist_lines(config, lines):
             stream = o['stream']
             schemas[stream] = o
             schema = float_to_decimal(o['schema'])
+            walk_schema_for_numeric_precision(schema)
             validators[stream] = Draft4Validator(schema, format_checker=FormatChecker())
             if 'key_properties' not in o:
                 raise Exception("key_properties field is required")
