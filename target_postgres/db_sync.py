@@ -189,7 +189,7 @@ class DbSync:
         flatten = flatten_record(record)
         return ','.join(
             [
-                json.dumps(flatten[name]) if name in flatten and flatten[name] else ''
+                json.dumps(flatten[name]) if name in flatten and flatten[name] is not None else ''
                 for name in self.flatten_schema
             ]
         )
