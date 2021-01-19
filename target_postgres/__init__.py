@@ -140,8 +140,11 @@ def persist_lines(config, lines):
             if 'stream' not in o:
                 raise Exception("Line is missing required key 'stream': {}".format(line))
             stream = o['stream']
-            schemas[stream] = o
             schema = float_to_decimal(o['schema'])
+            if 'properties' not in schema:
+                logger.debug(f"Schema for stream '{stream}' misses properties. Waiting for properly-formed schema.")
+                continue
+            schemas[stream] = o
             walk_schema_for_numeric_precision(schema)
             validators[stream] = Draft4Validator(schema, format_checker=FormatChecker())
             if 'key_properties' not in o:
