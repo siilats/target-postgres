@@ -3,7 +3,7 @@ from setuptools import setup
 
 setup(
     name="target-postgres",
-    version="meltano.1.1.10",
+    version="meltano.1.1.11",
     description="Meltano maintained fork of target-postgres - Singer.io target for Postgres",
     author="Meltano and Statsbot",
     url="https://statsbot.co",
