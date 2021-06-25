@@ -3,7 +3,7 @@ from setuptools import setup
 
 setup(
     name="target-postgres",
-    version="meltano.1.1.11",
+    version="1.1.11",
     description="Meltano maintained fork of target-postgres - Singer.io target for Postgres",
     author="Meltano and Statsbot",
     url="https://statsbot.co",
@@ -11,7 +11,7 @@ setup(
     py_modules=["target_postgres"],
     install_requires=[
         "singer-python==5.1.1",
-        "psycopg2-binary==2.8.6",
+        "psycopg2-binary",
         "inflection==0.3.1"
     ],
     entry_points="""
